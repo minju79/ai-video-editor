@@ -55,6 +55,9 @@ HIGHLIGHT_COLOR    = "#CCFF00"  # 형광 연두색
 TEXT_POP_MS        = 120        # 텍스트 줌팝 애니메이션 시간 (밀리초)
 TYPEWRITER_MS      = 80         # 타자기 효과: 글자 하나 나타나는 시간 (밀리초)
 
+# 자막 스타일: "modern" (형광 강조) | "variety" (예능 박스형)
+SUBTITLE_STYLE     = "modern"
+
 # --- 이미지 오버레이 ---
 OVERLAY_SIZE = 240      # 이미지 최대 크기 (px)
 OVERLAY_DUR  = 2.0      # 이미지 표시 시간 (초)
@@ -246,8 +249,27 @@ def split_subtitle(text, t_start, t_end, max_chars=SUBTITLE_MAX_CHARS):
 
 
 def make_ass_header(font_name):
-    white = hex_to_ass("#FFFFFF")
-    black = hex_to_ass("#000000")
+    white      = hex_to_ass("#FFFFFF")
+    black      = hex_to_ass("#000000")
+    # 예능 스타일용 색상
+    dark_blue  = "&H00993300&"   # 진한 파란 외곽선 (#003399 BGR)
+    sky_box    = "&H88F0C49D&"   # 하늘색 반투명 박스 (#9DC4F0 + 53% 투명)
+
+    fmt = ("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+           "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+           "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+           "Alignment, MarginL, MarginR, MarginV, Encoding\n")
+
+    style_default = (
+        f"Style: Default,{font_name},{SUBTITLE_SIZE},{white},{black},{black},"
+        f"&H00000000&,-1,0,0,0,100,100,0,0,1,3,1,5,10,10,0,1\n"
+    )
+    # 예능 박스형: 흰 글씨 + 진파랑 외곽 + 하늘색 반투명 박스, 하단 중앙
+    style_variety = (
+        f"Style: Variety,{font_name},{SUBTITLE_SIZE},{white},{white},{dark_blue},"
+        f"{sky_box},-1,0,0,0,100,100,2,0,3,4,0,2,30,30,60,1\n"
+    )
+
     return (
         f"﻿[Script Info]\n"
         f"ScriptType: v4.00+\n"
@@ -255,12 +277,9 @@ def make_ass_header(font_name):
         f"PlayResY: {TARGET_H}\n"
         f"ScaledBorderAndShadow: yes\n\n"
         f"[V4+ Styles]\n"
-        f"Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
-        f"OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
-        f"ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
-        f"Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Default,{font_name},{SUBTITLE_SIZE},{white},{black},{black},"
-        f"&H00000000&,-1,0,0,0,100,100,0,0,1,3,1,5,10,10,0,1\n\n"
+        f"{fmt}"
+        f"{style_default}"
+        f"{style_variety}\n"
         f"[Events]\n"
         f"Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
@@ -309,6 +328,7 @@ def transcribe_to_ass(video, ass_path, font_name):
 
     cx = TARGET_W // 2
     cy = TARGET_H // 2 + SUBTITLE_OFFSET_PT
+    is_variety = (SUBTITLE_STYLE == "variety")
 
     dialogues = []
     for seg in segs:
@@ -316,10 +336,17 @@ def transcribe_to_ass(video, ass_path, font_name):
         if not text:
             continue
         for chunk_text, ts, te in split_subtitle(text, seg.start, seg.end):
-            styled = apply_highlight(chunk_text)
-            dialogues.extend(
-                typewriter_lines(chunk_text, styled, ts, te, cx, cy)
-            )
+            if is_variety:
+                # 예능 박스형: 인라인 태그 없이 Variety 스타일 사용
+                line = (f"Dialogue: 0,{fmt_ts_ass(ts)},{fmt_ts_ass(te)},"
+                        f"Variety,,0,0,0,,{chunk_text}")
+                dialogues.append(line)
+            else:
+                # 기존 modern 스타일: 타자기 + 형광 강조
+                styled = apply_highlight(chunk_text)
+                dialogues.extend(
+                    typewriter_lines(chunk_text, styled, ts, te, cx, cy)
+                )
 
     with open(ass_path, "w", encoding="utf-8-sig") as f:
         f.write(make_ass_header(font_name))

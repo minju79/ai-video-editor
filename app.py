@@ -129,6 +129,11 @@ with st.sidebar:
 
     # 자막
     st.markdown("#### 자막")
+    subtitle_style = st.radio(
+        "자막 스타일",
+        ["🎨 Modern (형광 강조 + 타자기)", "📺 예능 (하늘색 박스)"],
+        index=0,
+    )
     font_size = st.slider("글자 크기", 40, 100, 72, 1,
                           help="참고 영상 수준: 65~80")
     tw_ms = st.slider("타자기 속도 (ms/글자)", 30, 300, 80, 10,
@@ -288,7 +293,9 @@ def apply_settings():
         ae.TARGET_W, ae.TARGET_H = 1080, 1920
     else:
         ae.TARGET_W, ae.TARGET_H = 1920, 1080
-    # 타자기 효과 비활성 시 팝 효과로 대체
+    # 자막 스타일
+    ae.SUBTITLE_STYLE = "variety" if "예능" in subtitle_style else "modern"
+    # 타자기 효과 비활성 시
     if not tw_on:
         ae.TYPEWRITER_MS = 0
 
