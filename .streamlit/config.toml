@@ -1,6 +1,6 @@
 [server]
 maxUploadSize = 500
-headless = false
+headless = true
 
 [browser]
 gatherUsageStats = false
