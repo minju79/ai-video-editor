@@ -169,7 +169,24 @@ with st.sidebar:
     sfx_on = st.toggle("효과음 자동 생성", value=True)
 
     st.markdown("---")
-    st.caption("🎨 강조색·크기 등은 바로 아래 실행 시 적용됩니다")
+
+    # BGM
+    st.markdown("#### 🎵 배경음악 (BGM)")
+    bgm_file = st.file_uploader(
+        "MP3 또는 WAV 파일 업로드",
+        type=["mp3", "wav", "m4a"],
+        label_visibility="collapsed",
+    )
+    if bgm_file:
+        st.audio(bgm_file)
+        bgm_vol = st.slider("BGM 볼륨", 1, 40, 12, 1,
+                            help="12% 권장 (목소리가 잘 들리게)")
+    else:
+        bgm_vol = 12
+        st.caption("assets/bgm.mp3 파일이 있으면 자동 적용됩니다")
+
+    st.markdown("---")
+    st.caption("🎨 설정은 편집 시작 시 적용됩니다")
 
 # ── 메인: 헤더 ────────────────────────────────────────────────
 col_title, col_badge = st.columns([5, 1])
@@ -378,16 +395,21 @@ def run_pipeline(files):
         if os.path.exists(img0) and os.path.exists(img1) and n > 0:
             overlay_times = ae.pick_overlay_times(ass_path)
 
-        # 효과음 생성 여부
-        if not sfx_on:
-            # 효과음 없이 렌더링 (render_final 내부에서 생성하므로 assets에 더미 생성)
-            pass
+        # BGM 임시 저장
+        bgm_tmp = None
+        if bgm_file:
+            bgm_tmp = os.path.join(tmpdir, "bgm_upload.mp3")
+            with open(bgm_tmp, "wb") as f:
+                f.write(bgm_file.getvalue())
+            add_log(f"BGM 적용: {bgm_file.name}  (볼륨 {bgm_vol}%)")
 
         out_path = os.path.join(tmpdir, "result.mp4")
         if n > 0:
-            add_log("최종 렌더링 중 (자막·효과음·이미지 합성)...")
+            add_log("최종 렌더링 중 (자막·효과음·BGM·이미지 합성)...")
             ae.render_final(merged, ass_path, tmpdir, out_path,
-                            assets_dir, clip_boundaries, overlay_times)
+                            assets_dir, clip_boundaries, overlay_times,
+                            bgm_path=bgm_tmp,
+                            bgm_volume=bgm_vol / 100)
         else:
             add_log("음성 인식 결과 없음 → 자막 없이 저장")
             shutil.copy(merged, out_path)
