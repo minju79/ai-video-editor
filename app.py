@@ -193,32 +193,37 @@ if not AE_OK:
 
 # ── 파일 업로드 ───────────────────────────────────────────────
 st.markdown("### 📁 영상 파일 업로드")
-st.caption("여러 파일을 선택하면 파일명 순서대로 합쳐집니다")
+st.caption("여러 파일 선택 시 파일명 순서대로 합쳐집니다 · MP4/MOV/MKV/AVI 지원")
 
 uploaded = st.file_uploader(
-    "MP4, MOV, MKV, AVI 파일을 여기에 드래그하거나 클릭해서 선택",
+    "영상 파일 선택",
     type=["mp4", "mov", "mkv", "avi", "m4v", "webm"],
     accept_multiple_files=True,
     label_visibility="collapsed",
 )
 
-# 업로드된 파일 목록 표시
+# 업로드된 파일 목록 + 미리보기
 if uploaded:
     sorted_files = sorted(uploaded, key=lambda f: f.name.lower())
-    st.markdown(f"**{len(sorted_files)}개 파일 선택됨** (처리 순서)")
+    st.markdown(f"**{len(sorted_files)}개 파일** (처리 순서대로)")
+
     for i, f in enumerate(sorted_files, 1):
         size_mb = f.size / 1024 / 1024
-        st.markdown(
-            f'<div class="file-card">'
-            f'<span style="background:#21262D;color:#8B95A1;border-radius:6px;'
-            f'padding:2px 8px;font-size:12px;font-weight:700;">{i}</span>'
-            f'<span style="flex:1;font-size:14px;font-weight:600;">{f.name}</span>'
-            f'<span style="color:#6B7684;font-size:12px;">{size_mb:.1f} MB</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+        with st.expander(f"▶  {i}. {f.name}  ({size_mb:.1f} MB)", expanded=(i == 1)):
+            st.video(f)  # 영상 미리보기
 
 st.markdown("---")
+
+# ── 설정 요약 표시 ────────────────────────────────────────────
+if uploaded:
+    st.markdown("#### 현재 설정")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("글자 크기", f"{font_size}pt")
+    c2.metric("Whisper 모델", model)
+    c3.metric("타자기 속도", f"{tw_ms}ms/자")
+    c4.metric("강조 색상", highlight.split()[1])
+    st.caption("👈 왼쪽 사이드바에서 설정 변경 가능")
+    st.markdown("---")
 
 # ── 실행 버튼 ─────────────────────────────────────────────────
 col_run, col_dl = st.columns([2, 1])
@@ -409,15 +414,16 @@ if run_btn and uploaded:
         st.session_state.done = True
         st.rerun()
 
-# ── 완료 배너 ─────────────────────────────────────────────────
-if st.session_state.done:
-    st.markdown(
-        '<div class="success-banner">'
-        '<p style="font-size:32px;margin:0;">✅</p>'
-        '<p style="font-size:20px;font-weight:700;color:#00C471;margin:8px 0 4px;">편집 완료!</p>'
-        '<p style="font-size:14px;color:#8B95A1;">위의 ⬇️ 결과 다운로드 버튼을 눌러 저장하세요</p>'
-        '</div>',
-        unsafe_allow_html=True,
+# ── 완료 배너 + 결과 미리보기 ────────────────────────────────
+if st.session_state.done and st.session_state.result_bytes:
+    st.success("✅ 편집 완료! 아래에서 결과 영상을 확인하고 다운로드하세요.")
+    st.video(st.session_state.result_bytes)
+    st.download_button(
+        "⬇️  결과 영상 다운로드",
+        data=st.session_state.result_bytes,
+        file_name=st.session_state.result_name,
+        mime="video/mp4",
+        use_container_width=True,
     )
 
 # ── 사용 가이드 (업로드 전) ───────────────────────────────────

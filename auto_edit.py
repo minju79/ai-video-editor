@@ -537,11 +537,25 @@ def render_final(merged, ass_path, tmpdir, out_path,
 # ============================================================
 
 def find_font(assets_dir):
-    if not os.path.isdir(assets_dir):
-        return None, SUBTITLE_FALLBACK
-    for f in os.listdir(assets_dir):
-        if "gmarket" in f.lower() and f.lower().endswith(FONT_EXTS):
-            return assets_dir, SUBTITLE_FONT
+    """폰트 탐색: assets → Linux 시스템 → Windows 폴백 순서"""
+    # 1. assets 폴더의 GmarketSans
+    if os.path.isdir(assets_dir):
+        for f in os.listdir(assets_dir):
+            if "gmarket" in f.lower() and f.lower().endswith(FONT_EXTS):
+                return assets_dir, SUBTITLE_FONT
+
+    # 2. Linux 시스템 한글 폰트 (Streamlit Cloud 등)
+    linux_candidates = [
+        ("/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",  "NanumGothicBold"),
+        ("/usr/share/fonts/truetype/nanum/NanumGothic.ttf",       "NanumGothic"),
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",   "Noto Sans CJK KR"),
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  "DejaVu Sans"),
+    ]
+    for font_path, font_name in linux_candidates:
+        if os.path.exists(font_path):
+            return os.path.dirname(font_path), font_name
+
+    # 3. Windows 폴백
     return None, SUBTITLE_FALLBACK
 
 
