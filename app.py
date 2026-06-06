@@ -210,7 +210,9 @@ if uploaded:
     for i, f in enumerate(sorted_files, 1):
         size_mb = f.size / 1024 / 1024
         with st.expander(f"▶  {i}. {f.name}  ({size_mb:.1f} MB)", expanded=(i == 1)):
-            st.video(f)  # 영상 미리보기
+            col_v, col_empty = st.columns([1, 2])
+            with col_v:
+                st.video(f)  # 영상 미리보기 (1/3 크기)
 
 st.markdown("---")
 
@@ -417,7 +419,9 @@ if run_btn and uploaded:
 # ── 완료 배너 + 결과 미리보기 ────────────────────────────────
 if st.session_state.done and st.session_state.result_bytes:
     st.success("✅ 편집 완료! 아래에서 결과 영상을 확인하고 다운로드하세요.")
-    st.video(st.session_state.result_bytes)
+    col_r, col_re = st.columns([1, 2])
+    with col_r:
+        st.video(st.session_state.result_bytes)
     st.download_button(
         "⬇️  결과 영상 다운로드",
         data=st.session_state.result_bytes,
