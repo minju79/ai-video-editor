@@ -323,40 +323,53 @@ def typewriter_lines(plain_text, styled_text, ts, te, cx, cy):
     return lines
 
 
-def transcribe_to_ass(video, ass_path, font_name):
+def transcribe_to_chunks(video):
+    """음성 인식 → [(start, end, text), ...] 청크 리스트 반환.
+    앱에서 자막 수정 후 chunks_to_ass()로 ASS 생성."""
     from faster_whisper import WhisperModel
-    print(f"  음성 인식 중 (모델: {WHISPER_MODEL}, CPU)... 영상 길이에 따라 시간이 걸립니다.")
+    print(f"  음성 인식 중 (모델: {WHISPER_MODEL}, CPU)...")
     model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
     segs, _ = model.transcribe(str(video), language=LANGUAGE,
                                vad_filter=True, beam_size=5)
-
-    cx = TARGET_W // 2
-    cy = TARGET_H // 2 + SUBTITLE_OFFSET_PT
-    is_variety = (SUBTITLE_STYLE == "variety")
-
-    dialogues = []
+    chunks = []
     for seg in segs:
         text = seg.text.strip()
         if not text:
             continue
         for chunk_text, ts, te in split_subtitle(text, seg.start, seg.end):
-            if is_variety:
-                # 예능 박스형: 인라인 태그 없이 Variety 스타일 사용
-                line = (f"Dialogue: 0,{fmt_ts_ass(ts)},{fmt_ts_ass(te)},"
-                        f"Variety,,0,0,0,,{chunk_text}")
-                dialogues.append(line)
-            else:
-                # 기존 modern 스타일: 타자기 + 형광 강조
-                styled = apply_highlight(chunk_text)
-                dialogues.extend(
-                    typewriter_lines(chunk_text, styled, ts, te, cx, cy)
-                )
+            chunks.append((ts, te, chunk_text))
+    return chunks
 
+
+def chunks_to_ass(chunks, font_name):
+    """청크 리스트 → ASS 파일 내용 문자열 반환"""
+    cx = TARGET_W // 2
+    cy = TARGET_H // 2 + SUBTITLE_OFFSET_PT
+    is_variety = (SUBTITLE_STYLE == "variety")
+
+    dialogues = []
+    for ts, te, chunk_text in chunks:
+        if not chunk_text.strip():
+            continue
+        if is_variety:
+            dialogues.append(
+                f"Dialogue: 0,{fmt_ts_ass(ts)},{fmt_ts_ass(te)},"
+                f"Variety,,0,0,0,,{chunk_text}"
+            )
+        else:
+            styled = apply_highlight(chunk_text)
+            dialogues.extend(typewriter_lines(chunk_text, styled, ts, te, cx, cy))
+
+    return make_ass_header(font_name) + "\n".join(dialogues)
+
+
+def transcribe_to_ass(video, ass_path, font_name):
+    """음성 인식 → ASS 파일 저장 (단계 없이 직접 처리할 때 사용)"""
+    chunks = transcribe_to_chunks(video)
+    content = chunks_to_ass(chunks, font_name)
     with open(ass_path, "w", encoding="utf-8-sig") as f:
-        f.write(make_ass_header(font_name))
-        f.write("\n".join(dialogues))
-
-    return len(dialogues)
+        f.write(content)
+    return len(chunks)
 
 
 def parse_ass_times(ass_path):

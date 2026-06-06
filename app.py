@@ -109,6 +109,14 @@ for k, v in {
     "log_lines": [],
     "processing": False,
     "done": False,
+    # 2단계 처리용
+    "stage": "upload",          # "upload" | "edit_sub" | "done"
+    "subtitle_chunks": [],      # [(ts, te, text), ...]
+    "merged_tmpdir": None,      # 1단계 tmpdir (2단계까지 유지)
+    "merged_path": None,        # merged.mp4 경로
+    "clip_boundaries": [],
+    "overlay_times": [],
+    "font_name": "NanumGothic",
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -316,16 +324,20 @@ def apply_settings():
     if not tw_on:
         ae.TYPEWRITER_MS = 0
 
-def run_pipeline(files):
-    tmpdir = tempfile.mkdtemp(prefix="webapp_edit_")
+def run_stage1(files):
+    """1단계: 무음 제거 + 합치기 + 자막 생성 → 자막 수정 대기"""
     assets_dir = str(BASE_DIR / "assets")
     os.makedirs(assets_dir, exist_ok=True)
 
+    # 이전 tmpdir 정리
+    if st.session_state.merged_tmpdir:
+        shutil.rmtree(st.session_state.merged_tmpdir, ignore_errors=True)
+
+    tmpdir = tempfile.mkdtemp(prefix="webapp_s1_")
     try:
         apply_settings()
 
-        # ── 1. 파일 저장 ──────────────────────────────────────
-        add_log("[1/4] 업로드 파일 저장 중...", "📁")
+        add_log("[1/3] 파일 저장 중...", "📁")
         video_paths = []
         for i, f in enumerate(sorted(files, key=lambda x: x.name.lower())):
             ext = Path(f.name).suffix
@@ -334,120 +346,185 @@ def run_pipeline(files):
                 out.write(f.getvalue())
             video_paths.append(dst)
             add_log(f"✓ {f.name}  ({f.size/1024/1024:.1f} MB)")
-        set_progress(10)
+        set_progress(15)
 
-        # ── 2. 무음 제거 ──────────────────────────────────────
-        add_log("[2/4] 무음 구간 제거 중...", "✂️")
+        add_log("[2/3] 무음 구간 제거 + 합치는 중...", "✂️")
         clips, clip_durs = [], []
         for idx, v in enumerate(video_paths):
             segs = ae.speech_segments(v)
             dur  = ae.ffprobe_duration(v)
             kept = sum(e - s for s, e in segs)
-            add_log(f"{Path(v).name}: {dur:.1f}s → {kept:.1f}s  (구간 {len(segs)}개)")
+            add_log(f"{Path(v).name}: {dur:.1f}s → {kept:.1f}s")
             clip = os.path.join(tmpdir, f"clip_{idx:03d}.mp4")
             if ae.trim_and_normalize(v, clip, segs):
                 clips.append(clip)
                 clip_durs.append(kept)
         if not clips:
-            add_log("오류: 처리할 구간이 없습니다.", "❌")
-            return None
-        set_progress(35)
+            add_log("오류: 처리할 구간 없음", "❌")
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return False
 
-        # ── 3. 합치기 ─────────────────────────────────────────
-        add_log(f"[3/4] 영상 {len(clips)}개 합치는 중...", "🔗")
         merged = os.path.join(tmpdir, "merged.mp4")
         if len(clips) == 1:
             shutil.copy(clips[0], merged)
         else:
             ae.concat_clips(clips, merged, tmpdir)
-        add_log(f"합치기 완료 → {sum(clip_durs):.1f}초")
-        set_progress(55)
+        set_progress(50)
 
-        # ── 4. 자막 + 효과음 + 렌더링 ────────────────────────
-        add_log("[4/4] 자막 생성 및 렌더링 중...", "📝")
-        add_log(f"Whisper {model} 모델로 한국어 음성 인식 중...")
-
+        add_log("[3/3] 한국어 음성 인식 중...", "📝")
+        add_log(f"Whisper {model} 모델 사용 중 (시간이 걸릴 수 있습니다)")
         _, font_name = ae.find_font(assets_dir)
-        ass_path = os.path.join(tmpdir, "result.ass")
 
-        # stdout 캡처해서 로그에 추가
         buf = io.StringIO()
         with redirect_stdout(buf):
-            n = ae.transcribe_to_ass(merged, ass_path, font_name)
-        for line in buf.getvalue().splitlines():
-            if line.strip():
-                add_log(line.strip())
+            chunks = ae.transcribe_to_chunks(merged)
+        add_log(f"자막 {len(chunks)}줄 인식 완료 → 수정 후 영상 완성하세요!")
+        set_progress(100)
 
-        add_log(f"자막 {n}줄 생성 완료")
-        set_progress(75)
-
-        # 클립 경계 (효과음 전환 타이밍)
+        # 클립 경계
         clip_boundaries = []
         acc = 0.0
         for d in clip_durs[:-1]:
             acc += d
             clip_boundaries.append(acc)
 
-        # 이미지 오버레이 (assets에 image.png, image1.png 있으면)
+        # 이미지 오버레이 타이밍
         overlay_times = []
         img0 = os.path.join(assets_dir, "image.png")
         img1 = os.path.join(assets_dir, "image1.png")
-        if os.path.exists(img0) and os.path.exists(img1) and n > 0:
-            overlay_times = ae.pick_overlay_times(ass_path)
+        if os.path.exists(img0) and os.path.exists(img1) and chunks:
+            tmp_ass = os.path.join(tmpdir, "tmp.ass")
+            content = ae.chunks_to_ass(chunks, font_name)
+            with open(tmp_ass, "w", encoding="utf-8-sig") as f:
+                f.write(content)
+            overlay_times = ae.pick_overlay_times(tmp_ass)
 
-        # BGM 임시 저장
+        # 세션에 저장 (tmpdir은 2단계까지 유지)
+        st.session_state.merged_tmpdir  = tmpdir
+        st.session_state.merged_path    = merged
+        st.session_state.subtitle_chunks = chunks
+        st.session_state.clip_boundaries = clip_boundaries
+        st.session_state.overlay_times   = overlay_times
+        st.session_state.font_name       = font_name
+        st.session_state.stage           = "edit_sub"
+        return True
+
+    except Exception as e:
+        add_log(f"오류: {e}", "❌")
+        st.exception(e)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return False
+
+
+def run_stage2(edited_chunks):
+    """2단계: 수정된 자막으로 최종 영상 렌더링"""
+    tmpdir     = st.session_state.merged_tmpdir
+    merged     = st.session_state.merged_path
+    font_name  = st.session_state.font_name
+    clip_boundaries = st.session_state.clip_boundaries
+    overlay_times   = st.session_state.overlay_times
+    assets_dir = str(BASE_DIR / "assets")
+
+    try:
+        apply_settings()
+
+        add_log("수정된 자막으로 ASS 생성 중...", "📝")
+        ass_path = os.path.join(tmpdir, "result_edit.ass")
+        content = ae.chunks_to_ass(edited_chunks, font_name)
+        with open(ass_path, "w", encoding="utf-8-sig") as f:
+            f.write(content)
+        set_progress(20)
+
+        # BGM
         bgm_tmp = None
         if bgm_file:
             bgm_tmp = os.path.join(tmpdir, "bgm_upload.mp3")
             with open(bgm_tmp, "wb") as f:
                 f.write(bgm_file.getvalue())
-            add_log(f"BGM 적용: {bgm_file.name}  (볼륨 {bgm_vol}%)")
+            add_log(f"BGM: {bgm_file.name}  (볼륨 {bgm_vol}%)")
 
-        out_path = os.path.join(tmpdir, "result.mp4")
-        if n > 0:
-            add_log("최종 렌더링 중 (자막·효과음·BGM·이미지 합성)...")
-            ae.render_final(merged, ass_path, tmpdir, out_path,
-                            assets_dir, clip_boundaries, overlay_times,
-                            bgm_path=bgm_tmp,
-                            bgm_volume=bgm_vol / 100)
-        else:
-            add_log("음성 인식 결과 없음 → 자막 없이 저장")
-            shutil.copy(merged, out_path)
-
+        out_path = os.path.join(tmpdir, "result_final.mp4")
+        add_log("최종 렌더링 중 (자막·효과음·BGM 합성)...", "🎬")
+        ae.render_final(merged, ass_path, tmpdir, out_path,
+                        assets_dir, clip_boundaries, overlay_times,
+                        bgm_path=bgm_tmp,
+                        bgm_volume=bgm_vol / 100)
         set_progress(100)
-        add_log("✅ 편집 완료!", "🎉")
+        add_log("✅ 완성!", "🎉")
 
         with open(out_path, "rb") as f:
             return f.read()
 
     except Exception as e:
-        add_log(f"오류 발생: {e}", "❌")
+        add_log(f"오류: {e}", "❌")
         st.exception(e)
         return None
-
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+        st.session_state.merged_tmpdir = None
 
 
-# ── 실행 트리거 ───────────────────────────────────────────────
+# ── 1단계 실행 트리거 ─────────────────────────────────────────
 if run_btn and uploaded:
     st.session_state.processing = True
-    st.session_state.done = False
-    st.session_state.log_lines = []
+    st.session_state.done       = False
+    st.session_state.stage      = "upload"
+    st.session_state.log_lines  = []
     st.session_state.result_bytes = None
 
-    result = run_pipeline(uploaded)
-
+    ok = run_stage1(uploaded)
     st.session_state.processing = False
-    if result:
-        st.session_state.result_bytes = result
-        st.session_state.result_name = "result_편집완료.mp4"
-        st.session_state.done = True
+    if ok:
         st.rerun()
+
+# ── 자막 수정 UI (1단계 완료 후) ─────────────────────────────
+if st.session_state.stage == "edit_sub" and st.session_state.subtitle_chunks:
+    st.markdown("---")
+    st.markdown("### ✏️ 자막 수정")
+    st.caption("오타나 잘못 인식된 부분을 수정하세요. 한 줄 = 자막 1개 (타이밍은 자동 유지)")
+
+    chunks = st.session_state.subtitle_chunks
+    default_text = "\n".join(text for _, _, text in chunks)
+
+    edited_text = st.text_area(
+        "자막 텍스트 (수정 후 아래 버튼 클릭)",
+        value=default_text,
+        height=min(400, max(150, len(chunks) * 22)),
+        label_visibility="collapsed",
+    )
+
+    col_info, col_btn = st.columns([3, 1])
+    with col_info:
+        st.caption(f"총 {len(chunks)}줄 · 줄 수를 맞춰주세요 (줄 추가/삭제 가능)")
+    with col_btn:
+        finish_btn = st.button("🎬 영상 완성하기",
+                               use_container_width=True, type="primary")
+
+    if finish_btn:
+        edited_lines = [l.strip() for l in edited_text.split("\n")]
+        # 편집된 텍스트를 원래 타임스탬프와 매핑
+        edited_chunks = []
+        for i, (ts, te, _) in enumerate(chunks):
+            txt = edited_lines[i] if i < len(edited_lines) else ""
+            if txt:
+                edited_chunks.append((ts, te, txt))
+
+        st.session_state.processing = True
+        st.session_state.log_lines  = []
+        result = run_stage2(edited_chunks)
+        st.session_state.processing = False
+
+        if result:
+            st.session_state.result_bytes = result
+            st.session_state.result_name  = "result_편집완료.mp4"
+            st.session_state.done         = True
+            st.session_state.stage        = "done"
+            st.rerun()
 
 # ── 완료 배너 + 결과 미리보기 ────────────────────────────────
 if st.session_state.done and st.session_state.result_bytes:
-    st.success("✅ 편집 완료! 아래에서 결과 영상을 확인하고 다운로드하세요.")
+    st.markdown("---")
+    st.success("✅ 편집 완료! 결과 영상을 확인하고 다운로드하세요.")
     col_r, col_re = st.columns([1, 2])
     with col_r:
         st.video(st.session_state.result_bytes)
@@ -458,6 +535,14 @@ if st.session_state.done and st.session_state.result_bytes:
         mime="video/mp4",
         use_container_width=True,
     )
+    if st.button("🔄 새 영상 편집하기"):
+        for k in ["done","stage","subtitle_chunks","result_bytes","log_lines"]:
+            st.session_state[k] = None if k != "stage" else "upload"
+            if k == "log_lines":
+                st.session_state[k] = []
+            if k == "done":
+                st.session_state[k] = False
+        st.rerun()
 
 # ── 사용 가이드 (업로드 전) ───────────────────────────────────
 if not uploaded and not st.session_state.done:
